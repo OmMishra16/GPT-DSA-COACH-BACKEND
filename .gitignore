@@ -67,3 +67,9 @@ frontend/coverage/
 
 # Yarn Integrity file
 .yarn-integrity
+
+# VIVA preparation (personal notes)
+VIVA_PREP.md
+
+# Claude Code files
+.claude/

@@ -1,36 +1,32 @@
-const OpenAI = require('openai');
+const { GoogleGenAI } = require('@google/genai');
 const leetcodeService = require('./leetcodeService');
 
-if (!process.env.OPENAI_API_KEY) {
-  console.warn('OPENAI_API_KEY environment variable is not set');
+if (!process.env.GEMINI_API_KEY) {
+  console.warn('GEMINI_API_KEY environment variable is not set');
 }
 
-const openai = process.env.OPENAI_API_KEY
-  ? new OpenAI({ apiKey: process.env.OPENAI_API_KEY.trim() })
+const ai = process.env.GEMINI_API_KEY
+  ? new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY })
   : null;
 
-// Helper function to strip HTML tags for plain text display
 const stripHtml = (html) => {
   return html.replace(/<[^>]*>?/gm, '');
 };
 
 const generateResponse = async (message, leetcodeUrl, chatHistory = [], problemDetails = null) => {
   try {
-    if (!openai) {
-      throw new Error('OPENAI_API_KEY is not configured');
+    if (!ai) {
+      throw new Error('GEMINI_API_KEY is not configured');
     }
 
-    // Check if this is the first time we're seeing problem details
-    const isProblemNew = problemDetails && 
-                         chatHistory.length > 0 && 
-                         !chatHistory.some(msg => 
+    const isProblemNew = problemDetails &&
+                         chatHistory.length > 0 &&
+                         !chatHistory.some(msg =>
                            msg.content && msg.content.includes(`I've found the problem "${problemDetails.title}"`));
-    
-    // If we just discovered a problem, confirm it with the user
+
     if (isProblemNew) {
-      // Strip HTML tags for cleaner display in chat
       const plainContent = stripHtml(problemDetails.content);
-      
+
       return `I've found the problem "${problemDetails.title}" (${problemDetails.difficulty}).
 
 Here's what it's asking:
@@ -38,21 +34,18 @@ ${plainContent.substring(0, 300)}${plainContent.length > 300 ? '...' : ''}
 
 Let me know if you'd like to work on this problem, or if you meant a different one.`;
     }
-    
-    // If no problem details yet, try to extract problem name from message
+
     if (!problemDetails && !leetcodeUrl) {
-      // Extract potential problem name from message
       const words = message.toLowerCase().split(/\s+/);
-      const searchTerm = words.slice(0, 3).join(' '); // Take first 3 words as potential problem name
-      
+      const searchTerm = words.slice(0, 3).join(' ');
+
       const searchResult = await leetcodeService.searchProblem(searchTerm);
       if (searchResult && searchResult.length > 0) {
         problemDetails = await leetcodeService.getProblemDetails(searchResult[0].titleSlug);
-        
+
         if (problemDetails) {
-          // Strip HTML tags for cleaner display in chat
           const plainContent = stripHtml(problemDetails.content);
-          
+
           return `I've found the problem "${problemDetails.title}" (${problemDetails.difficulty}).
 
 Here's what it's asking:
@@ -127,26 +120,28 @@ Key Rules:
 
 Remember: Your goal is to build their problem-solving muscles, not to solve the problem for them.`;
 
-    const messages = [
-      { role: "system", content: systemPrompt },
-      ...chatHistory.map(msg => ({
-        role: msg.role,
-        content: msg.content
-      })),
-      { role: "user", content: message }
-    ];
+    // Build conversation history for Gemini
+    let conversationContent = systemPrompt + '\n\n';
 
-    const completion = await openai.chat.completions.create({
-      model: "gpt-4",
-      messages,
-      temperature: 0.7,
-      max_tokens: 500
+    for (const msg of chatHistory) {
+      const role = msg.role === 'assistant' ? 'Assistant' : 'User';
+      conversationContent += `${role}: ${msg.content}\n\n`;
+    }
+    conversationContent += `User: ${message}\n\nAssistant:`;
+
+    const response = await ai.models.generateContent({
+      model: 'gemini-2.0-flash',
+      contents: conversationContent,
+      config: {
+        temperature: 0.7,
+        maxOutputTokens: 500,
+      }
     });
 
-    return completion.choices[0].message.content;
+    return response.text;
   } catch (error) {
-    console.error('OpenAI API Error:', error);
-    throw new Error('Failed to generate response');
+    console.error('Gemini API Error:', error);
+    throw new Error('Failed to generate response from Gemini');
   }
 };
 

@@ -1,36 +1,35 @@
 const OpenAI = require('openai');
 const leetcodeService = require('./leetcodeService');
 
-if (!process.env.OPENAI_API_KEY) {
-  console.warn('OPENAI_API_KEY environment variable is not set');
+if (!process.env.GROQ_API_KEY) {
+  console.warn('GROQ_API_KEY environment variable is not set');
 }
 
-const openai = process.env.OPENAI_API_KEY
-  ? new OpenAI({ apiKey: process.env.OPENAI_API_KEY.trim() })
+const groq = process.env.GROQ_API_KEY
+  ? new OpenAI({
+      baseURL: 'https://api.groq.com/openai/v1',
+      apiKey: process.env.GROQ_API_KEY.trim()
+    })
   : null;
 
-// Helper function to strip HTML tags for plain text display
 const stripHtml = (html) => {
   return html.replace(/<[^>]*>?/gm, '');
 };
 
 const generateResponse = async (message, leetcodeUrl, chatHistory = [], problemDetails = null) => {
   try {
-    if (!openai) {
-      throw new Error('OPENAI_API_KEY is not configured');
+    if (!groq) {
+      throw new Error('GROQ_API_KEY is not configured');
     }
 
-    // Check if this is the first time we're seeing problem details
-    const isProblemNew = problemDetails && 
-                         chatHistory.length > 0 && 
-                         !chatHistory.some(msg => 
+    const isProblemNew = problemDetails &&
+                         chatHistory.length > 0 &&
+                         !chatHistory.some(msg =>
                            msg.content && msg.content.includes(`I've found the problem "${problemDetails.title}"`));
-    
-    // If we just discovered a problem, confirm it with the user
+
     if (isProblemNew) {
-      // Strip HTML tags for cleaner display in chat
       const plainContent = stripHtml(problemDetails.content);
-      
+
       return `I've found the problem "${problemDetails.title}" (${problemDetails.difficulty}).
 
 Here's what it's asking:
@@ -38,21 +37,18 @@ ${plainContent.substring(0, 300)}${plainContent.length > 300 ? '...' : ''}
 
 Let me know if you'd like to work on this problem, or if you meant a different one.`;
     }
-    
-    // If no problem details yet, try to extract problem name from message
+
     if (!problemDetails && !leetcodeUrl) {
-      // Extract potential problem name from message
       const words = message.toLowerCase().split(/\s+/);
-      const searchTerm = words.slice(0, 3).join(' '); // Take first 3 words as potential problem name
-      
+      const searchTerm = words.slice(0, 3).join(' ');
+
       const searchResult = await leetcodeService.searchProblem(searchTerm);
       if (searchResult && searchResult.length > 0) {
         problemDetails = await leetcodeService.getProblemDetails(searchResult[0].titleSlug);
-        
+
         if (problemDetails) {
-          // Strip HTML tags for cleaner display in chat
           const plainContent = stripHtml(problemDetails.content);
-          
+
           return `I've found the problem "${problemDetails.title}" (${problemDetails.difficulty}).
 
 Here's what it's asking:
@@ -136,8 +132,8 @@ Remember: Your goal is to build their problem-solving muscles, not to solve the 
       { role: "user", content: message }
     ];
 
-    const completion = await openai.chat.completions.create({
-      model: "gpt-4",
+    const completion = await groq.chat.completions.create({
+      model: "llama-3.3-70b-versatile",
       messages,
       temperature: 0.7,
       max_tokens: 500
@@ -145,8 +141,8 @@ Remember: Your goal is to build their problem-solving muscles, not to solve the 
 
     return completion.choices[0].message.content;
   } catch (error) {
-    console.error('OpenAI API Error:', error);
-    throw new Error('Failed to generate response');
+    console.error('Groq API Error:', error);
+    throw new Error('Failed to generate response from Groq');
   }
 };
 

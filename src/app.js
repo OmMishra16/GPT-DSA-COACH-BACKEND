@@ -67,10 +67,12 @@ mongoose.connect(MONGODB_URI, {
   console.log('Continuing without database connection...');
 });
 
-// Start server
+// Start server only if not in test mode
 const PORT = process.env.PORT || 3001;
-app.listen(PORT, () => {
-  console.log(`Server running on port ${PORT}`);
-});
+if (process.env.NODE_ENV !== 'test') {
+  app.listen(PORT, () => {
+    console.log(`Server running on port ${PORT}`);
+  });
+}
 
 module.exports = app;

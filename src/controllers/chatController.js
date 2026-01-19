@@ -1,4 +1,4 @@
-const gptService = require('../services/gptService');
+const aiService = require('../services/aiService');
 const leetcodeService = require('../services/leetcodeService');
 let ChatSession;
 
@@ -30,7 +30,9 @@ const chatSessions = new Map();
 
 const handleChat = async (req, res, next) => {
   try {
-    const { message, leetcodeUrl, sessionId } = req.body;
+    const { message, leetcodeUrl, sessionId, provider } = req.body;
+    // Allow provider to be specified via query param or body (query takes precedence)
+    const aiProvider = req.query.provider || provider;
     
     // Get or create chat session
     let chatSession;
@@ -96,11 +98,12 @@ const handleChat = async (req, res, next) => {
     }
 
     // Generate response using problem details if available
-    const response = await gptService.generateResponse(
-      message, 
-      chatSession.leetcodeUrl, 
+    const response = await aiService.generateResponse(
+      message,
+      chatSession.leetcodeUrl,
       chatSession.messages,
-      chatSession.problemDetails
+      chatSession.problemDetails,
+      aiProvider
     );
     
     // Update chat history
@@ -118,10 +121,11 @@ const handleChat = async (req, res, next) => {
       chatSessions.set(sessionId, chatSession);
     }
     
-    res.json({ 
-      success: true, 
+    res.json({
+      success: true,
       response,
-      problemDetails: chatSession.problemDetails 
+      problemDetails: chatSession.problemDetails,
+      provider: aiProvider || aiService.DEFAULT_PROVIDER
     });
   } catch (error) {
     console.error('Chat handler error:', error);

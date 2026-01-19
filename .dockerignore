@@ -1,0 +1,35 @@
+# Dependencies
+node_modules/
+
+# Git
+.git/
+.gitignore
+
+# Environment files (secrets should not be in image)
+.env
+.env.*
+
+# IDE
+.vscode/
+.idea/
+
+# Tests (not needed in production)
+tests/
+coverage/
+*.test.js
+*.spec.js
+
+# Documentation
+README.md
+*.md
+
+# CI/CD
+.github/
+
+# Kubernetes manifests
+k8s/
+
+# Misc
+.DS_Store
+*.log
+npm-debug.log*
