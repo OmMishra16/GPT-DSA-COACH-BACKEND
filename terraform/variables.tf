@@ -7,7 +7,7 @@ variable "aws_region" {
 variable "instance_type" {
   description = "EC2 instance type"
   type        = string
-  default     = "t2.micro" # Free tier eligible
+  default     = "t2.medium" # 2 vCPU, 4GB RAM - supports k3s + 2 replicas
 }
 
 variable "public_key_path" {

@@ -110,8 +110,8 @@ resource "aws_instance" "k8s_server" {
               apt-get update
               apt-get install -y curl
 
-              # Install k3s with proper permissions
-              curl -sfL https://get.k3s.io | sh -s - --write-kubeconfig-mode 644
+              # Install k3s with minimal footprint (disable traefik, metrics-server)
+              curl -sfL https://get.k3s.io | sh -s - --write-kubeconfig-mode 644 --disable traefik --disable metrics-server
 
               # Wait for k3s to be ready
               sleep 30
@@ -161,11 +161,11 @@ resource "aws_instance" "k8s_server" {
                                 key: GROQ_API_KEY
                         resources:
                           requests:
-                            memory: "128Mi"
-                            cpu: "100m"
+                            memory: "64Mi"
+                            cpu: "50m"
                           limits:
-                            memory: "256Mi"
-                            cpu: "200m"
+                            memory: "128Mi"
+                            cpu: "150m"
               DEPLOY
 
               # Wait for deployment to be ready
