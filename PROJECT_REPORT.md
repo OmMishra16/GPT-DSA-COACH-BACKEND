@@ -11,7 +11,7 @@
 
 I built a backend application called DSA Coach that helps students learn Data Structures and Algorithms. It uses AI to guide learners through problems using the Socratic method - asking questions instead of giving direct answers.
 
-The app was working fine locally, but deploying it was a pain. Every time I made a change, I had to manually run tests, build the Docker image, push it to DockerHub, SSH into my server, pull the image, and restart the container. This took 15-20 minutes and I'd often forget a step or make a typo somewhere.
+The app was working fine locally, but deploying it was painful. Every time I made a change, I had to manually run tests, build the Docker image, push it to DockerHub, SSH into my server, pull the image, and restart the container. This took 15-20 minutes and I'd often forget a step or make a typo somewhere.
 
 I wanted to fix this by building a proper CI/CD pipeline. The goal was simple: push my code to GitHub and have everything else happen automatically - tests, security scans, Docker build, and deployment to Kubernetes.
 
@@ -19,8 +19,9 @@ I wanted to fix this by building a proper CI/CD pipeline. The goal was simple: p
 
 ## 2. Application Overview
 
-DSA Coach Backend is a Node.js/Express API that connects to AI providers (Groq, OpenAI, Gemini) to help students understand coding problems. Here's what it does:
+DSA Coach Backend is a Node.js/Express API that connects to AI providers (Groq, OpenAI, Gemini) to help students understand coding problems.
 
+**What it does:**
 - Takes a LeetCode problem and student's question
 - Uses AI to guide them with hints instead of solutions
 - Stores chat history in MongoDB
@@ -31,7 +32,7 @@ DSA Coach Backend is a Node.js/Express API that connects to AI providers (Groq, 
 - MongoDB for storing sessions
 - Docker for containerization
 
-The app exposes a few endpoints:
+**Endpoints:**
 - `GET /api/health` - health check
 - `POST /api/chat` - chat with AI coach
 - `GET /api/problems/:slug` - fetch problem details
@@ -40,171 +41,267 @@ The app exposes a few endpoints:
 
 ## 3. CI/CD Architecture
 
-Here's how my pipeline works:
+Here's the complete flow of my pipeline:
 
 ```
 Developer (me)
      |
-     | git push
+     | git push to main
      v
 GitHub Repository
      |
-     | triggers
+     | triggers automatically
      v
-CI Pipeline (GitHub Actions)
+===========================================
+           CI PIPELINE (ci.yml)
+===========================================
      |
-     +---> Lint (ESLint)
-     +---> Test (Jest)
-     +---> SAST (CodeQL)
-     +---> SCA (npm audit)
-     +---> Docker Build
-     +---> Trivy Scan
-     +---> Container Test
-     +---> Push to DockerHub
+     +---> Build & Test Job
+     |        +---> Checkout code
+     |        +---> Setup Node.js 20
+     |        +---> npm ci (install deps)
+     |        +---> ESLint (code quality)
+     |        +---> Jest (unit tests)
+     |
+     +---> SAST Job (needs build-and-test)
+     |        +---> CodeQL Analysis
+     |
+     +---> SCA Job (needs build-and-test)
+     |        +---> npm audit
+     |
+     +---> Docker Job (needs all above)
+              +---> Build Docker image
+              +---> Trivy vulnerability scan
+              +---> Container runtime test
+              +---> Push to DockerHub
+     |
+     | on success, triggers
+     v
+===========================================
+           CD PIPELINE (cd.yml)
+===========================================
+     |
+     +---> Deploy Job
+     |        +---> SSH to EC2 (ubuntu@<EC2_HOST>)
+     |        +---> Fix k3s permissions
+     |        +---> kubectl rollout restart
+     |        +---> Wait for rollout complete
+     |        +---> Health check
+     |
+     +---> DAST Job (placeholder)
+              +---> Would run OWASP ZAP
      |
      v
-CD Pipeline
+===========================================
+        KUBERNETES (k3s on AWS EC2)
+===========================================
      |
-     +---> SSH to EC2
-     +---> kubectl rollout restart
+     +---> Deployment (2 replicas)
+     |        +---> Pod 1 (dsa-coach-backend)
+     |        +---> Pod 2 (dsa-coach-backend)
+     |
+     +---> Service (NodePort)
+     |        +---> Port 80 -> 3001
+     |        +---> NodePort 30000-32767
      |
      v
-Kubernetes (k3s on AWS)
-     |
-     +---> 2 Pod replicas
-     +---> NodePort Service
-     |
-     v
-Users access via http://<EC2-IP>:<NodePort>/api/health
+Users access: http://<EC2-IP>:<NodePort>/api/health
 ```
 
 ---
 
 ## 4. CI Pipeline Design & Stages
 
-I designed my CI pipeline with a specific reason for each stage. Here's why each one matters:
+I designed my CI pipeline with a specific reason for each stage. The pipeline is in `.github/workflows/ci.yml`.
 
-### Stage 1: Lint (ESLint)
-**Why I added it:** Catches sloppy code before it becomes a problem. Missing semicolons, unused variables, inconsistent formatting - these things pile up and make code hard to maintain. ESLint forces me to keep things clean.
+### Stage 1: Build & Test
+**What it does:**
+- Checks out code
+- Sets up Node.js 20 with npm caching
+- Runs `npm ci` for clean install
+- Runs ESLint for code quality
+- Runs Jest tests
 
-### Stage 2: Unit Tests (Jest)
-**Why I added it:** I have tests for the health endpoint and basic API functionality. If someone breaks something, tests catch it immediately. The pipeline fails fast so I don't waste time on broken code.
+**Why I added it:** This is the first gate. If code doesn't lint or tests fail, there's no point running expensive security scans or building Docker images. Fail fast.
 
-### Stage 3: SAST - CodeQL
-**Why I added it:** This is GitHub's own security scanner. It analyzes my JavaScript code for vulnerabilities like:
-- SQL/NoSQL injection
-- XSS attacks
+### Stage 2: SAST (CodeQL)
+**What it does:** GitHub's CodeQL analyzes my JavaScript code for security vulnerabilities.
+
+**Why I added it:** Catches issues like:
+- Injection attacks (SQL, NoSQL, command injection)
+- XSS vulnerabilities
 - Path traversal
-- Hardcoded secrets
+- Hardcoded credentials
 
-I chose CodeQL because it's free, integrates directly with GitHub, and shows findings in the Security tab.
+I chose CodeQL because it's free, built into GitHub, and results show in the Security tab.
 
-### Stage 4: SCA - npm audit
-**Why I added it:** My app has dependencies like Express, Axios, MongoDB driver, etc. These packages can have known vulnerabilities. npm audit checks them against the National Vulnerability Database. If a dependency has a critical CVE, I want to know before deploying.
+### Stage 3: SCA (npm audit)
+**What it does:** Scans all my npm dependencies against the National Vulnerability Database.
 
-### Stage 5: Docker Build
-**Why I added it:** I use a multi-stage Dockerfile to keep the image small. Stage 1 installs everything, Stage 2 only copies what's needed for production. This reduces attack surface and speeds up pulls.
+**Why I added it:** My app uses Express, Axios, MongoDB driver, and other packages. Any of these could have known CVEs. I want to know before I deploy, not after.
 
-### Stage 6: Trivy Scan
-**Why I added it:** Even if my code is secure, the base image (node:20-alpine) might have vulnerable packages. Trivy scans the entire container - OS packages and libraries - and flags critical/high vulnerabilities.
+### Stage 4: Docker Build, Scan & Push
+**What it does:**
+1. Builds Docker image using multi-stage Dockerfile
+2. Runs Trivy to scan for OS and library vulnerabilities
+3. Spins up the container and hits `/api/health` to verify it works
+4. If all passes, pushes to DockerHub with commit SHA tag
 
-### Stage 7: Container Runtime Test
-**Why I added it:** Before pushing to DockerHub, I spin up the container and hit the health endpoint. If the app doesn't start properly, this catches it. No point pushing a broken image.
-
-### Stage 8: Push to DockerHub
-**Why I added it:** Only happens if everything above passes. Tags the image with the commit SHA and `latest`. This gives me traceability - I can always find which commit produced which image.
+**Why I added it:** Even if my code is clean, the base image (node:20-alpine) could have vulnerabilities. Trivy catches those. The runtime test ensures the container actually starts - no point pushing a broken image.
 
 ---
 
 ## 5. CD Pipeline & Infrastructure
 
+The CD pipeline is in `.github/workflows/cd.yml`. It triggers automatically when CI succeeds.
+
+### How CD Works
+
+The CD pipeline uses SSH to connect to my EC2 and restart the Kubernetes deployment:
+
+```yaml
+- name: Deploy via SSH
+  uses: appleboy/ssh-action@v1.0.3
+  with:
+    host: ${{ secrets.EC2_HOST }}
+    username: ubuntu
+    key: ${{ secrets.EC2_SSH_KEY }}
+    script: |
+      sudo chmod 644 /etc/rancher/k3s/k3s.yaml
+      kubectl rollout restart deployment/dsa-coach-backend
+      kubectl rollout status deployment/dsa-coach-backend --timeout=180s
+```
+
+### Why SSH Instead of kubectl from GitHub?
+I tried using kubeconfig directly but k3s generates configs with `127.0.0.1` as the server address. Modifying it to use the public IP was complex. SSH is simpler - just connect and run kubectl locally on the server.
+
+### Optional Terraform Job
+The CD pipeline also has an optional Terraform job that only runs when I manually trigger it with a checkbox. This lets me:
+- Provision new infrastructure from GitHub
+- Recreate everything if something breaks
+
 ### Why Terraform?
-I used Terraform to provision my AWS infrastructure. Manual setup through AWS console is error-prone and hard to replicate. With Terraform, I run one command and get:
-- EC2 instance (t2.medium)
-- Security group with the right ports
+I used Terraform to provision my AWS infrastructure. Manual setup through AWS console is error-prone. With Terraform, I run one command and get:
+- EC2 instance (t2.medium - 2 vCPU, 4GB RAM)
+- Security group with required ports (22, 80, 443, 6443, 30000-32767)
 - SSH key pair
-- k3s installed and configured
+- k3s installed with `--disable traefik --disable metrics-server`
 - My app deployed automatically
 
-If I mess something up, I can destroy everything and recreate it in 5 minutes.
+### Why t2.medium?
+I originally tried t2.micro (free tier) but it couldn't handle k3s + 2 replicas. The load average hit 8+ on a single-core machine and kubectl commands kept timing out. Upgraded to t2.medium (2 vCPU, 4GB RAM) and everything runs smoothly now.
 
 ### Why k3s?
 I chose k3s over full Kubernetes because:
-- It's lightweight (runs on a single EC2)
-- Still gives me deployments, services, secrets
-- Easy to install with one curl command
+- Lightweight - runs on a single EC2
+- Still gives me deployments, services, secrets, rolling updates
+- One curl command to install
 - Good enough for this demo
 
-### CD Workflow
-When CI passes, the CD pipeline:
-1. SSHs into my EC2
-2. Runs `kubectl rollout restart deployment/dsa-coach-backend`
-3. Kubernetes pulls the latest image from DockerHub
-4. Does a rolling update (zero downtime)
+I disabled traefik and metrics-server to reduce resource usage.
 
-I store the EC2 IP and SSH key as GitHub Secrets.
+### DAST Placeholder
+The CD pipeline includes a DAST job that's currently a placeholder. In production, this would run OWASP ZAP against the live application to test for runtime vulnerabilities.
 
 ---
 
 ## 6. Security & Quality Controls
 
-### Security Approach
-I followed the shift-left principle - catch security issues early in the pipeline rather than in production.
+### Shift-Left Security
+I followed the shift-left principle - catch security issues early when they're cheap to fix.
 
-**SAST (CodeQL):** Scans my source code for vulnerabilities without running it. Found 0 critical issues in my codebase.
-
-**SCA (npm audit):** Checks dependencies. I had a few moderate vulnerabilities in dev dependencies which I accepted since they don't ship to production.
-
-**Container Scanning (Trivy):** Scans the final Docker image. Alpine base image is minimal so there's less to go wrong.
+| Stage | Tool | What It Catches |
+|-------|------|-----------------|
+| SAST | CodeQL | Code vulnerabilities (injection, XSS) |
+| SCA | npm audit | Vulnerable dependencies |
+| Container | Trivy | OS/library CVEs in Docker image |
+| DAST | (Placeholder) | Runtime vulnerabilities |
 
 ### Container Security
 My Dockerfile follows best practices:
-- Multi-stage build (smaller image)
-- Runs as non-root user (user ID 1001)
-- Only production dependencies installed
+```dockerfile
+FROM node:20-alpine AS builder
+# ... build stage
+
+FROM node:20-alpine AS production
+RUN adduser -S nodeuser -u 1001
+USER nodeuser
+HEALTHCHECK --interval=30s CMD wget --spider http://localhost:3001/api/health
+```
+
+- Multi-stage build (smaller image, less attack surface)
+- Runs as non-root user (UID 1001)
+- Only production dependencies
 - Health check configured
 
 ### Secret Management
-- GitHub Secrets: DockerHub credentials, SSH key, EC2 host
-- Terraform variables: Marked sensitive, passed at runtime
-- Kubernetes Secrets: GROQ_API_KEY injected as environment variable
+No secrets are hardcoded anywhere:
 
-No secrets are hardcoded anywhere.
+| Secret | Where Stored |
+|--------|--------------|
+| DOCKERHUB_USERNAME | GitHub Secrets |
+| DOCKERHUB_TOKEN | GitHub Secrets |
+| EC2_HOST | GitHub Secrets |
+| EC2_SSH_KEY | GitHub Secrets |
+| GROQ_API_KEY | Terraform variable (sensitive) → K8s Secret |
 
 ---
 
 ## 7. Results & Observations
 
 ### What Worked
-- Full pipeline runs in about 5-6 minutes
+- Full CI pipeline runs in ~5-6 minutes
 - Push to main automatically deploys to Kubernetes
 - Rolling updates mean zero downtime
 - Terraform makes infrastructure reproducible
+- t2.medium handles the workload easily (load ~0.1-0.2)
 
 ### CI Pipeline Results
 | Stage | Status | Time |
 |-------|--------|------|
-| Lint | Pass | ~5s |
-| Test | Pass | ~10s |
-| CodeQL | Pass | ~2min |
-| npm audit | Pass | ~10s |
+| Build & Test | Pass | ~45s |
+| SAST (CodeQL) | Pass | ~2min |
+| SCA (npm audit) | Pass | ~15s |
 | Docker Build | Pass | ~1min |
-| Trivy | Pass | ~30s |
+| Trivy Scan | Pass | ~30s |
 | Runtime Test | Pass | ~15s |
-| Push | Pass | ~30s |
+| Push to DockerHub | Pass | ~30s |
+| **Total CI** | Pass | ~5-6 min |
+
+### CD Pipeline Results
+| Stage | Status | Time |
+|-------|--------|------|
+| Deploy via SSH | Pass | ~20s |
+| Health Check | Pass | ~10s |
+| DAST (Placeholder) | Pass | ~3s |
+| **Total CD** | Pass | ~30s |
 
 ### Challenges I Faced
-1. **t2.micro was too small** - k3s + 2 replicas overloaded 1GB RAM. Had to upgrade to t2.medium.
 
-2. **k3s permission issues** - kubeconfig had wrong permissions after restart. Fixed by adding `chmod 644` in the CD script.
+1. **t2.micro was too small**
+   - k3s + 2 replicas overloaded 1GB RAM
+   - Load average hit 8+ on single core
+   - kubectl commands kept timing out
+   - Fixed by upgrading to t2.medium
 
-3. **SSH timeouts** - Sometimes k3s API wouldn't respond. Added retry logic and restart handling.
+2. **k3s permission issues**
+   - kubeconfig at `/etc/rancher/k3s/k3s.yaml` had wrong permissions after restart
+   - Fixed by adding `sudo chmod 644` in CD script
+
+3. **SSH timeouts in CD**
+   - Sometimes k3s API wouldn't respond immediately
+   - Added retry logic and k3s restart handling in the deploy script
+
+4. **Kubeconfig localhost issue**
+   - k3s generates kubeconfig with `127.0.0.1` as server
+   - Couldn't use it from GitHub Actions
+   - Solved by using SSH approach instead
 
 ### What I Learned
 - Always check resource requirements before choosing instance size
 - Infrastructure as Code saves hours of debugging
 - Shift-left testing catches issues when they're cheap to fix
-- Kubernetes is overkill for small apps but teaches important concepts
+- SSH-based deployment is simpler than trying to expose k8s API
 
 ---
 
@@ -212,16 +309,17 @@ No secrets are hardcoded anywhere.
 
 ### Current Limitations
 - No staging environment (deploys directly to production)
-- DAST is just a placeholder, not actually running security tests against live app
+- DAST is just a placeholder
 - Single node k3s - no real high availability
 - Manual secret rotation
+- EC2 IP changes on recreate (need to update GitHub secret)
 
 ### What I'd Add Next
-1. **OWASP ZAP for DAST** - Actually scan the running application for vulnerabilities
+1. **OWASP ZAP for DAST** - Actually scan the running app
 2. **ArgoCD for GitOps** - Declarative deployments instead of SSH
 3. **Prometheus/Grafana** - Monitoring and alerting
 4. **Staging environment** - Test before production
-5. **Automated secret rotation** - Better security hygiene
+5. **Elastic IP** - So EC2 IP doesn't change
 
 ---
 
@@ -242,6 +340,7 @@ cd terraform
 terraform init
 terraform apply -var="groq_api_key=your-key"
 # Note the EC2 IP from output
+# Update EC2_HOST GitHub secret with new IP
 ```
 
 ### GitHub Secrets Required
@@ -250,17 +349,29 @@ terraform apply -var="groq_api_key=your-key"
 | DOCKERHUB_USERNAME | DockerHub login |
 | DOCKERHUB_TOKEN | DockerHub access token |
 | EC2_HOST | EC2 public IP |
-| EC2_SSH_KEY | Private SSH key |
+| EC2_SSH_KEY | Private SSH key content |
+
+### Destroy Infrastructure (Save Costs)
+```bash
+cd terraform
+terraform destroy -var="groq_api_key=your-key"
+```
 
 ---
 
 ## 10. Conclusion
 
-I built a complete CI/CD pipeline that takes my code from git push to production automatically. The pipeline runs security scans (SAST, SCA, container scanning), tests, builds Docker images, and deploys to Kubernetes.
+I built a complete CI/CD pipeline that takes my code from git push to production automatically. The pipeline runs security scans (SAST, SCA, container scanning), tests, builds Docker images, and deploys to Kubernetes on AWS.
 
-The main takeaway for me was understanding why each stage exists. It's not about having the most stages - it's about catching the right issues at the right time. Linting catches code quality issues, tests catch bugs, security scans catch vulnerabilities, and container tests catch runtime issues. Each one serves a purpose.
+The main takeaway was understanding why each stage exists. It's not about having the most stages - it's about catching the right issues at the right time:
+- Linting catches code quality issues
+- Tests catch bugs
+- SAST catches code vulnerabilities
+- SCA catches dependency vulnerabilities
+- Trivy catches container vulnerabilities
+- Runtime test catches startup issues
 
-The project also taught me that DevOps is about automation and reliability, not just tools. I can now push code confidently knowing that if something is wrong, the pipeline will catch it before it reaches users.
+The project also taught me practical lessons about resource sizing (t2.micro vs t2.medium), permission issues (k3s kubeconfig), and choosing the right deployment approach (SSH over kubeconfig).
 
 ---
 
@@ -269,7 +380,8 @@ The project also taught me that DevOps is about automation and reliability, not 
 1. GitHub Actions - https://docs.github.com/en/actions
 2. Docker - https://docs.docker.com
 3. Kubernetes - https://kubernetes.io/docs
-4. Terraform AWS - https://registry.terraform.io/providers/hashicorp/aws
+4. Terraform AWS Provider - https://registry.terraform.io/providers/hashicorp/aws
 5. k3s - https://k3s.io
 6. Trivy - https://aquasecurity.github.io/trivy
 7. CodeQL - https://codeql.github.com
+8. appleboy/ssh-action - https://github.com/appleboy/ssh-action
