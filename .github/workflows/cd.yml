@@ -108,11 +108,18 @@ jobs:
             echo "Starting Kubernetes Deployment"
             echo "=========================================="
 
+            # Fix k3s kubeconfig permissions (required after restarts)
+            sudo chmod 644 /etc/rancher/k3s/k3s.yaml 2>/dev/null || true
+
             # Check if kubectl is available
             if ! command -v kubectl &> /dev/null; then
               echo "kubectl not found, waiting for k3s..."
               sleep 30
             fi
+
+            # Verify k3s is responding
+            echo "Checking k3s connectivity..."
+            kubectl get nodes || (echo "k3s not responding, restarting..." && sudo systemctl restart k3s && sleep 20 && sudo chmod 644 /etc/rancher/k3s/k3s.yaml)
 
             # Restart deployment to pull latest image
             echo "Restarting deployment to pull latest image..."
