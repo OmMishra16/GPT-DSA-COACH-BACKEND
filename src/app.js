@@ -39,7 +39,7 @@ apiRouter.get('/problems/:titleSlug', problemController.getProblemDetails);
 
 // Health check route
 apiRouter.get('/health', (req, res) => {
-  res.json({ status: 'ok', message: 'Server is running' });
+  res.json({ status: 'ok', message: 'Server is running !!!!!! lessgoooo' });
 });
 
 // Mount the API router
