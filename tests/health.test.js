@@ -15,7 +15,7 @@ describe('Health Check API', () => {
         .expect(200);
 
       expect(response.body).toHaveProperty('status', 'ok');
-      expect(response.body).toHaveProperty('message', 'Server is running');
+      expect(response.body).toHaveProperty('message', 'Server is running !!!!!! lessgoooo');
     });
   });
 
