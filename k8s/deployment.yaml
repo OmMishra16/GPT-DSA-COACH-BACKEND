@@ -24,7 +24,7 @@ spec:
     spec:
       containers:
         - name: dsa-coach-backend
-          image: DOCKERHUB_USERNAME/dsa-coach-backend:latest
+          image: mishraom/dsa-coach-backend:latest
           imagePullPolicy: Always
 
           ports:

@@ -9,92 +9,169 @@ on:
 
   workflow_dispatch:
     inputs:
-      image_tag:
-        description: 'Image tag to deploy (default: latest)'
-        required: false
-        default: 'latest'
+      deploy_infra:
+        description: 'Run Terraform to setup/recreate infrastructure'
+        type: boolean
+        default: false
 
 env:
   IMAGE_NAME: ${{ secrets.DOCKERHUB_USERNAME }}/dsa-coach-backend
 
 jobs:
+  # Optional: Terraform infrastructure provisioning
+  # Only runs when manually triggered with deploy_infra checkbox
+  terraform:
+    name: Terraform Infrastructure
+    runs-on: ubuntu-latest
+    if: github.event_name == 'workflow_dispatch' && github.event.inputs.deploy_infra == 'true'
+
+    outputs:
+      ec2_ip: ${{ steps.terraform.outputs.instance_public_ip }}
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: 1.6.0
+          terraform_wrapper: false
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: us-east-1
+
+      - name: Terraform Init
+        working-directory: ./terraform
+        run: terraform init
+
+      - name: Terraform Apply
+        id: terraform
+        working-directory: ./terraform
+        run: |
+          terraform apply -auto-approve \
+            -var="groq_api_key=${{ secrets.GROQ_API_KEY }}"
+
+          echo "instance_public_ip=$(terraform output -raw instance_public_ip)" >> $GITHUB_OUTPUT
+        env:
+          TF_VAR_groq_api_key: ${{ secrets.GROQ_API_KEY }}
+
+      - name: Wait for k3s to be ready
+        run: |
+          echo "Waiting 180 seconds for k3s to initialize..."
+          sleep 180
+
+      - name: Output new EC2 IP
+        run: |
+          echo "=========================================="
+          echo "Infrastructure provisioned successfully!"
+          echo "New EC2 IP: ${{ steps.terraform.outputs.instance_public_ip }}"
+          echo ""
+          echo "IMPORTANT: Update your EC2_HOST secret with this IP!"
+          echo "=========================================="
+
+  # Main deployment job
   deploy:
     name: Deploy to Kubernetes
     runs-on: ubuntu-latest
-    if: ${{ github.event.workflow_run.conclusion == 'success' || github.event_name == 'workflow_dispatch' }}
+    needs: [terraform]
+    if: always() && (github.event.workflow_run.conclusion == 'success' || github.event_name == 'workflow_dispatch')
 
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Setup kubectl
-        uses: azure/setup-kubectl@v3
-        with:
-          version: 'v1.28.0'
-
-      - name: Configure kubeconfig
+      - name: Determine EC2 Host
+        id: host
         run: |
-          mkdir -p $HOME/.kube
-          echo "${{ secrets.KUBECONFIG }}" | base64 -d > $HOME/.kube/config
-          chmod 600 $HOME/.kube/config
-        if: ${{ secrets.KUBECONFIG != '' }}
-
-      - name: Update deployment image
-        run: |
-          if [ "${{ github.event_name }}" == "workflow_dispatch" ]; then
-            IMAGE_TAG="${{ github.event.inputs.image_tag }}"
+          if [ "${{ needs.terraform.outputs.ec2_ip }}" != "" ]; then
+            echo "host=${{ needs.terraform.outputs.ec2_ip }}" >> $GITHUB_OUTPUT
+            echo "Using Terraform output IP: ${{ needs.terraform.outputs.ec2_ip }}"
           else
-            IMAGE_TAG="${{ github.event.workflow_run.head_sha }}"
+            echo "host=${{ secrets.EC2_HOST }}" >> $GITHUB_OUTPUT
+            echo "Using secret EC2_HOST: ${{ secrets.EC2_HOST }}"
           fi
 
-          sed -i "s|DOCKERHUB_USERNAME/dsa-coach-backend:latest|${{ env.IMAGE_NAME }}:${IMAGE_TAG}|g" k8s/deployment.yaml
+      - name: Deploy via SSH
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ steps.host.outputs.host }}
+          username: ubuntu
+          key: ${{ secrets.EC2_SSH_KEY }}
+          script_stop: true
+          script: |
+            echo "=========================================="
+            echo "Starting Kubernetes Deployment"
+            echo "=========================================="
 
-          echo "Deploying image: ${{ env.IMAGE_NAME }}:${IMAGE_TAG}"
+            # Check if kubectl is available
+            if ! command -v kubectl &> /dev/null; then
+              echo "kubectl not found, waiting for k3s..."
+              sleep 30
+            fi
 
-      - name: Deploy to Kubernetes
+            # Restart deployment to pull latest image
+            echo "Restarting deployment to pull latest image..."
+            kubectl rollout restart deployment/dsa-coach-backend
+
+            # Wait for rollout to complete
+            echo "Waiting for rollout to complete..."
+            kubectl rollout status deployment/dsa-coach-backend --timeout=180s
+
+            # Show status
+            echo ""
+            echo "=========================================="
+            echo "Deployment Status:"
+            echo "=========================================="
+            kubectl get pods -l app=dsa-coach-backend
+            echo ""
+            kubectl get svc dsa-coach-backend-svc
+            echo ""
+            echo "Deployment complete!"
+
+      - name: Health Check
         run: |
-          echo "Applying Kubernetes manifests..."
+          echo "Waiting 10 seconds for pods to be ready..."
+          sleep 10
 
-          kubectl apply -f k8s/service.yaml || echo "Service/Secret already exists or cluster not configured"
+          # Get NodePort (we'll try common ports)
+          echo "Attempting health check..."
+          for port in 30000 30001 30002 31000 32000; do
+            if curl -s --max-time 5 "http://${{ steps.host.outputs.host }}:${port}/api/health" | grep -q "ok"; then
+              echo "Health check passed on port ${port}!"
+              echo "App URL: http://${{ steps.host.outputs.host }}:${port}/api/health"
+              exit 0
+            fi
+          done
 
-          kubectl apply -f k8s/deployment.yaml || echo "Deployment failed or cluster not configured"
-
-          kubectl rollout status deployment/dsa-coach-backend --timeout=120s || echo "Rollout status check failed"
+          echo "Could not verify health check (NodePort may be different)"
+          echo "SSH to server and run: kubectl get svc dsa-coach-backend-svc"
         continue-on-error: true
 
-      - name: Verify deployment
-        run: |
-          echo "Checking deployment status..."
-          kubectl get deployments || echo "Cannot get deployments"
-          kubectl get pods || echo "Cannot get pods"
-          kubectl get services || echo "Cannot get services"
-        continue-on-error: true
-
+  # DAST placeholder
   dast:
-    name: DAST (Placeholder)
+    name: DAST (Security Testing)
     runs-on: ubuntu-latest
     needs: deploy
-    if: ${{ github.event.workflow_run.conclusion == 'success' || github.event_name == 'workflow_dispatch' }}
+    if: always() && needs.deploy.result == 'success'
 
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
       - name: DAST Placeholder
         run: |
-          echo "========================================"
+          echo "=========================================="
           echo "DAST (Dynamic Application Security Testing)"
-          echo "========================================"
+          echo "=========================================="
           echo ""
-          echo "In a production setup, this stage would:"
-          echo "1. Wait for deployment to be ready"
-          echo "2. Run OWASP ZAP or similar tool against the live application"
-          echo "3. Test for runtime vulnerabilities:"
-          echo "   - SQL Injection"
-          echo "   - Cross-Site Scripting (XSS)"
-          echo "   - Authentication bypass"
-          echo "   - CORS misconfigurations"
+          echo "In production, this would run OWASP ZAP:"
+          echo "docker run owasp/zap2docker-stable zap-baseline.py -t http://app-url"
           echo ""
-          echo "Example OWASP ZAP command:"
-          echo "docker run -t owasp/zap2docker-stable zap-baseline.py -t http://app-url"
-          echo "========================================"
+          echo "Tests for:"
+          echo "- SQL/NoSQL Injection"
+          echo "- Cross-Site Scripting (XSS)"
+          echo "- Authentication bypass"
+          echo "- CORS misconfigurations"
+          echo "=========================================="

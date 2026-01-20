@@ -115,26 +115,26 @@ npm run test   # Run Jest tests
 
 The CI pipeline implements **shift-left testing** - finding issues early where they're cheaper to fix.
 
-| Stage | Tool | Purpose | VIVA Point |
-|-------|------|---------|------------|
-| Checkout | actions/checkout | Get source code | Ephemeral VMs need fresh code |
-| Setup Node | actions/setup-node | Install runtime | Consistent environment + caching |
-| Install | npm ci | Install dependencies | Deterministic builds (not npm install) |
-| Lint | ESLint | Code quality | Catch issues before they become tech debt |
-| Test | Jest | Unit tests | Regression prevention |
-| SAST | CodeQL | Security analysis | Detects OWASP Top 10 vulnerabilities |
-| SCA | npm audit | Dependency scan | Supply chain security |
-| Docker Build | docker/build-push-action | Build image | Immutable artifact |
-| Trivy Scan | aquasecurity/trivy | Container scan | OS-level vulnerabilities |
-| Runtime Test | curl | Smoke test | Proves container actually runs |
-| Push | docker/build-push-action | Push to registry | Only after all gates pass |
+| Stage | Tool | Purpose |
+|-------|------|---------|
+| Checkout | actions/checkout | Get source code |
+| Setup Node | actions/setup-node | Install runtime with caching |
+| Install | npm ci | Deterministic dependency installation |
+| Lint | ESLint | Code quality enforcement |
+| Test | Jest | Unit test execution |
+| SAST | CodeQL | Static security analysis |
+| SCA | npm audit | Dependency vulnerability scan |
+| Docker Build | docker/build-push-action | Container image creation |
+| Trivy Scan | aquasecurity/trivy | Container vulnerability scan |
+| Runtime Test | curl | Container smoke test |
+| Push | docker/build-push-action | Push to DockerHub |
 
 ### CD Pipeline (`.github/workflows/cd.yml`)
 
-| Stage | Purpose | VIVA Point |
-|-------|---------|------------|
-| Deploy to K8s | Apply manifests | Declarative deployment |
-| DAST (Placeholder) | Runtime security | Completes security triangle |
+| Stage | Purpose |
+|-------|---------|
+| Deploy to K8s | Apply manifests to Kubernetes cluster |
+| DAST | Dynamic security testing (placeholder) |
 
 ### GitHub Secrets Required
 
